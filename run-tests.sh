@@ -23,3 +23,6 @@ echo "--- Running tests with IFD disabled"
 
 nix-build tests/with-import-from-derivation-tests.nix "${nix_options[@]}" \
   --option allow-import-from-derivation false
+
+nix-build tests/with-import-from-derivation-tests.nix "${nix_options[@]}" \
+  --option allow-import-from-derivation false

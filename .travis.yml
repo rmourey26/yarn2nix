@@ -1,12 +1,12 @@
 language: nix
 env:
-  - NIXPKGS_CHANNEL=nixos-18.09
+  - NIXPKGS_CHANNEL=nixos-20.09
   - NIXPKGS_CHANNEL=nixos-unstable
+  - NIXPKGS_CHANNEL=nixpkgs-unstable
 
 # By building the tests, we also build yarn2nix itself.
 script:
   # delete builtins.fetchGit cache, because it makes tests irreproducible:
   # test may pass with cache present, but in reality it should fail with "Cannot find revision" error
   - rm -rdf ~/.cache/nix/git
-
   - ./run-tests.sh

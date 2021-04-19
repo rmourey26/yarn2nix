@@ -4,11 +4,30 @@
 }:
 
 let
-  inherit (pkgs) stdenv lib fetchurl linkFarm callPackage git rsync makeWrapper;
+  inherit (pkgs)
+    runCommandNoCC gnutar stdenv lib linkFarm git rsync
+    makeWrapper;
 
-  compose = f: g: x: f (g x);
-  id = x: x;
-  composeAll = builtins.foldl' compose id;
+  inherit (import ./lib.nix { inherit (pkgs) lib; })
+    composeAll yarnLockToFetchables fixupYarnLock;
+
+  fetchurl = import <nix/fetchurl.nix>;
+  fetchgit = args: let
+    repo = builtins.fetchGit {
+      inherit (args) url rev ref;
+    };
+  in
+    runCommandNoCC args.name { buildInputs = [gnutar]; } ''
+      # Set u+w because tar-fs can't unpack archives with read-only dirs
+      # https://github.com/mafintosh/tar-fs/issues/79
+      tar cf $out --mode u+w -C ${repo} .
+    '';
+
+  fetch = args: {
+    git = fetchgit { inherit (args) url name rev ref; };
+    url = fetchurl { inherit (args) url name hash; };
+  }.${args.type};
+
 in rec {
   # Export yarn again to make it easier to find out which yarn was used.
   inherit yarn;
@@ -41,18 +60,13 @@ in rec {
         { shortName = licstr; }
         (builtins.attrValues lib.licenses);
 
-  # Generates the yarn.nix from the yarn.lock file
-  mkYarnNix = { yarnLock, flags ? [] }:
-    pkgs.runCommand "yarn.nix" {}
-    "${yarn2nix}/bin/yarn2nix --lockfile ${yarnLock} --no-patch --builtin-fetchgit ${lib.escapeShellArgs flags} > $out";
-
   # Loads the generated offline cache. This will be used by yarn as
   # the package source.
-  importOfflineCache = yarnNix:
-    let
-      pkg = callPackage yarnNix { };
-    in
-      pkg.offline_cache;
+  importOfflineCache = yarnLock: let
+    entries = (map (fetchable: {
+    inherit (fetchable) name;
+    path = fetch fetchable;
+  }) (yarnLockToFetchables { inherit yarnLock; })); in linkFarm "offline" entries;
 
   defaultYarnFlags = [
     "--offline"
@@ -67,7 +81,6 @@ in rec {
     version,
     packageJSON,
     yarnLock,
-    yarnNix ? mkYarnNix { inherit yarnLock; },
     yarnFlags ? defaultYarnFlags,
     pkgConfig ? {},
     preBuild ? "",
@@ -75,7 +88,7 @@ in rec {
     workspaceDependencies ? [], # List of yarn packages
   }:
     let
-      offlineCache = importOfflineCache yarnNix;
+      offlineCache = importOfflineCache yarnLock;
 
       extraBuildInputs = (lib.flatten (builtins.map (key:
         pkgConfig.${key}.buildInputs or []
@@ -113,20 +126,20 @@ in rec {
         export HOME=$PWD/yarn_home
       '';
 
+      fixedupYarnLock = fixupYarnLock yarnLock;
+      passAsFile = [ "fixedupYarnLock" ];
+
       buildPhase = ''
         runHook preBuild
 
         mkdir -p "deps/${pname}"
         cp ${packageJSON} "deps/${pname}/package.json"
         cp ${workspaceJSON} ./package.json
-        cp ${yarnLock} ./yarn.lock
-        chmod +w ./yarn.lock
+
+        cp $fixedupYarnLockPath ./yarn.lock
+        chmod +w $_
 
         yarn config --offline set yarn-offline-mirror ${offlineCache}
-
-        # Do not look up in the registry, but in the offline cache.
-        ${fixup_yarn_lock}/bin/fixup_yarn_lock yarn.lock
-
         ${workspaceDependencyLinks}
 
         yarn install ${lib.escapeShellArgs yarnFlags}
@@ -225,7 +238,6 @@ in rec {
     src,
     packageJSON ? src + "/package.json",
     yarnLock ? src + "/yarn.lock",
-    yarnNix ? mkYarnNix { inherit yarnLock; },
     yarnFlags ? defaultYarnFlags,
     yarnPreBuild ? "",
     pkgConfig ? {},
@@ -238,7 +250,7 @@ in rec {
       package = lib.importJSON packageJSON;
       pname = package.name;
       safeName = reformatPackageName pname;
-      version = package.version or attrs.version;
+      version = attrs.version or package.version;
       baseName = unlessNull name "${safeName}-${version}";
 
       workspaceDependenciesTransitive = lib.unique (
@@ -250,7 +262,7 @@ in rec {
         name = "${safeName}-modules-${version}";
         preBuild = yarnPreBuild;
         workspaceDependencies = workspaceDependenciesTransitive;
-        inherit packageJSON pname version yarnLock yarnNix yarnFlags pkgConfig;
+        inherit packageJSON pname version yarnLock yarnFlags pkgConfig;
       };
 
       publishBinsFor_ = unlessNull publishBinsFor [pname];
@@ -278,13 +290,13 @@ in rec {
           linkDirToDirLinks "$(dirname node_modules/${dep.pname})"
           mkdir -p "deps/${dep.pname}"
           tar -xf "${dep}/tarballs/${dep.name}.tgz" --directory "deps/${dep.pname}" --strip-components=1
-          if [ ! -e "deps/${dep.pname}/node_modules" ]; then
-            ln -s "${deps}/deps/${dep.pname}/node_modules" "deps/${dep.pname}/node_modules"
-          fi
+          #if [ ! -e "deps/${dep.pname}/node_modules" ]; then
+          #  #ln -s "${deps}/deps/${dep.pname}/node_modules" "deps/${dep.pname}/node_modules"
+          #fi
         '')
         workspaceDependenciesTransitive;
 
-    in stdenv.mkDerivation (builtins.removeAttrs attrs ["pkgConfig" "workspaceDependencies"] // {
+    in stdenv.mkDerivation (builtins.removeAttrs attrs ["pkgConfig" "workspaceDependencies"] // rec {
       inherit src pname;
 
       name = baseName;
@@ -335,8 +347,9 @@ in rec {
         mkdir -p $out/{bin,libexec/${pname}}
         mv node_modules $out/libexec/${pname}/node_modules
         mv deps $out/libexec/${pname}/deps
+        patchShebangs $_
 
-        node ${./internal/fixup_bin.js} $out/bin $out/libexec/${pname}/node_modules ${lib.concatStringsSep " " publishBinsFor_}
+        node ${./binHelper.js} $out/bin $out/libexec/${pname}/node_modules ${lib.concatStringsSep " " publishBinsFor_} | xargs -rn2 ln -sr
 
         runHook postInstall
       '';
@@ -364,68 +377,4 @@ in rec {
         license = if packageJSON ? license then spdxLicense packageJSON.license else "";
       } // (attrs.meta or {});
     });
-
-  yarn2nix = mkYarnPackage {
-    src =
-      let
-        src = ./.;
-
-        mkFilter = { dirsToInclude, filesToInclude, root }: path: type:
-          let
-            inherit (pkgs.lib) any flip elem hasSuffix hasPrefix elemAt splitString;
-
-            subpath = elemAt (splitString "${toString root}/" path) 1;
-            spdir = elemAt (splitString "/" subpath) 0;
-          in elem spdir dirsToInclude ||
-            (type == "regular" && elem subpath filesToInclude);
-      in builtins.filterSource
-          (mkFilter {
-            dirsToInclude = ["bin" "lib"];
-            filesToInclude = ["package.json" "yarn.lock"];
-            root = src;
-          })
-          src;
-
-    # yarn2nix is the only package that requires the yarnNix option.
-    # All the other projects can auto-generate that file.
-    yarnNix = ./yarn.nix;
-    
-    # Using the filter above and importing package.json from the filtered
-    # source results in an error in restricted mode. To circumvent this,
-    # we import package.json from the unfiltered source
-    packageJSON = ./package.json;
-
-    yarnFlags = defaultYarnFlags ++ ["--production=true"];
-
-    buildPhase = ''
-      source ${./nix/expectShFunctions.sh}
-
-      expectFilePresent ./node_modules/.yarn-integrity
-
-      # check dependencies are installed
-      expectFilePresent ./node_modules/@yarnpkg/lockfile/package.json
-
-      # check devDependencies are not installed
-      expectFileOrDirAbsent ./node_modules/.bin/eslint
-      expectFileOrDirAbsent ./node_modules/eslint/package.json
-    '';
-  };
-
-  fixup_yarn_lock = stdenv.mkDerivation {
-    name = "fixup_yarn_lock";
-
-    buildInputs = [ nodejs ];
-
-    phases = [ "installPhase" ];
-
-    installPhase = ''
-      mkdir -p $out/lib
-      mkdir -p $out/bin
-
-      cp ${./lib/urlToName.js} $out/lib/urlToName.js
-      cp ${./internal/fixup_yarn_lock.js} $out/bin/fixup_yarn_lock
-
-      patchShebangs $out
-    '';
-  };
 }

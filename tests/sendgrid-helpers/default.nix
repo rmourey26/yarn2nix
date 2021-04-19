@@ -3,7 +3,7 @@
 yarn2nix.mkYarnPackage {
   src = ./.;
   buildPhase = ''
-    source ${../../nix/expectShFunctions.sh}
+    source ${../expectShFunctions.sh}
 
     expectFilePresent ./node_modules/.yarn-integrity
 

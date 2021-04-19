@@ -6,7 +6,7 @@ yarn2nix.mkYarnPackage {
   yarnFlags = yarn2nix.defaultYarnFlags ++ ["--production=true"];
 
   buildPhase = ''
-    source ${../../nix/expectShFunctions.sh}
+    source ${../expectShFunctions.sh}
 
     expectFilePresent ./node_modules/.yarn-integrity
 
