@@ -27,10 +27,6 @@ Make sure to generate the lock file with yarn >= 1.10.1
 
 ## Example `default.nix`
 
-For example, for the
-[`front-end`](https://github.com/microservices-demo/front-end) of weave's
-microservice reference application:
-
 ```nix
 let
   yarn2nixUrl =  "https://github.com/input-output-hk/yarn2nix";
@@ -73,6 +69,62 @@ overlay. Expanding on the previous example:
           defaultPackage = my-yarn-pkg;
         };
       };
+}
+```
+
+### Git dependencies
+
+For retrieving git dependencies, we use `builtins.fetchGit` exclusively while
+providing it with all the information necessary to work in restricted mode. This
+seems to work as expected in most use-cases. One limitation of
+`builtins.fetchGit`, however, is that it must be given a ref (branch or tag)
+from which the desired revision is reachable. Most commonly, one is provided in
+`package.json`: `git+https://github.com/org/repo#branch`. But sometimes during
+development it might be convenient to call for a specific commit in
+`package.json` to prevent the resolved revision in the lock file from advancing
+on an update. In that case, we currently don't have a way to guess what the
+branch is. For that reason, `mkYarnPackage` can take two additional arguments:
+
+- `refHints`: an attribute set that maps dependency names to branches. (default:
+  `{}`)
+- `defaultRef`: the branch we would fallback to if `package.json` calls for a
+  specific revision and `refHints` does not have a corresponding entry.
+  (default: `master`)
+
+Example:
+
+We want to pin commit `f18d6829ef` from the `develop` branch of `@foo/bar`.
+
+package.json:
+
+```json
+{
+   ...
+   "dependencies": {
+     "@foo/bar": "git+https://github.com/foo-corp/barjs#f18d6829ef"
+   }
+
+}
+```
+
+`default.nix`:
+
+```nix
+# ...
+mkYarnPackage {
+  src = ./.;
+  defaultRef = "develop";
+}
+```
+
+or, if we also have other dependencies that require different branches:
+
+```nix
+# ...
+mkYarnPackage {
+  src = ./.;
+  refHints."@foo/bar" = "develop";
+  refHints."@foo/baz" = "main";
 }
 ```
 

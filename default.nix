@@ -62,11 +62,14 @@ in rec {
 
   # Loads the generated offline cache. This will be used by yarn as
   # the package source.
-  importOfflineCache = yarnLock: let
-    entries = (map (fetchable: {
-    inherit (fetchable) name;
-    path = fetch fetchable;
-  }) (yarnLockToFetchables { inherit yarnLock; })); in linkFarm "offline" entries;
+  importOfflineCache = { yarnLock, refHints, defaultRef }: let
+    fetchables = yarnLockToFetchables {
+      inherit yarnLock refHints defaultRef;
+    };
+    entries = lib.forEach fetchables (fetchable: {
+      inherit (fetchable) name;
+      path = fetch fetchable;
+    }); in linkFarm "offline" entries;
 
   defaultYarnFlags = [
     "--offline"
@@ -85,10 +88,14 @@ in rec {
     pkgConfig ? {},
     preBuild ? "",
     postBuild ? "",
+    refHints ? {},
+    defaultRef ? "master",
     workspaceDependencies ? [], # List of yarn packages
   }:
     let
-      offlineCache = importOfflineCache yarnLock;
+      offlineCache = importOfflineCache {
+        inherit yarnLock refHints defaultRef;
+      };
 
       extraBuildInputs = (lib.flatten (builtins.map (key:
         pkgConfig.${key}.buildInputs or []
@@ -243,6 +250,8 @@ in rec {
     pkgConfig ? {},
     extraBuildInputs ? [],
     publishBinsFor ? null,
+    defaultRef ? "master",
+    refHints ? {},
     workspaceDependencies ? [], # List of yarnPackages
     ...
   }@attrs:
@@ -262,7 +271,7 @@ in rec {
         name = "${safeName}-modules-${version}";
         preBuild = yarnPreBuild;
         workspaceDependencies = workspaceDependenciesTransitive;
-        inherit packageJSON pname version yarnLock yarnFlags pkgConfig;
+        inherit packageJSON pname version yarnLock yarnFlags pkgConfig defaultRef refHints;
       };
 
       publishBinsFor_ = unlessNull publishBinsFor [pname];
@@ -296,7 +305,12 @@ in rec {
         '')
         workspaceDependenciesTransitive;
 
-    in stdenv.mkDerivation (builtins.removeAttrs attrs ["pkgConfig" "workspaceDependencies"] // rec {
+    in stdenv.mkDerivation (builtins.removeAttrs attrs [
+      "pkgConfig"
+      "workspaceDependencies"
+      "refHints"
+      "defaultRef"
+    ] // rec {
       inherit src pname;
 
       name = baseName;

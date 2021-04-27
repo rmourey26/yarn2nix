@@ -59,7 +59,7 @@ in rec {
         else line))
     (concatStringsSep "\n")];
 
-  yarnLockToFetchables = { yarnLock, defaultRef ? "master" }:
+  yarnLockToFetchables = { yarnLock, refHints ? {}, defaultRef ? "master" }:
   pipe yarnLock [
     readFile
     (split "\n\n")    # double new line works as a separator between chunks, each chunk is a dependency
@@ -90,8 +90,24 @@ in rec {
 
       hash = if length chunk > 2 then elemAt chunk 2 else null;
 
+      depName = pipe dep [
+        chop
+        maybeUnescape
+        (split "@")
+        (list: let
+          nth = elemAt list;
+          first = nth 0;
+          second = nth 1;
+        in if first == "" then "@${second}" else first)
+      ];
+
       rev = last splittedResolved;
-      ref = if (hasPrefix refrev rev) then "master" else refrev;
+      ref = if (hasPrefix refrev rev) then
+        # package.json specified a revision, use defaultRef
+        refHints.${depName} or defaultRef
+        else
+        # it's ref (branch or tag). we're good.
+        refrev;
 
       npmUrl = head splittedResolved;
       nixUrl = pipe npmUrl [
