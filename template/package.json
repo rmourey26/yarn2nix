@@ -1,0 +1,11 @@
+{
+  "name": "package-name",
+  "version": "1.0.0",
+  "description": "a yarn package",
+  "main": "index.js",
+  "bin": "launcher.js",
+  "license": "MIT",
+  "dependencies": {
+    "chalk-animation": "^1.6.0"
+  }
+}
