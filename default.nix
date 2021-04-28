@@ -363,7 +363,9 @@ in rec {
         mv deps $out/libexec/${pname}/deps
         patchShebangs $_
 
-        node ${./binHelper.js} $out/bin $out/libexec/${pname}/node_modules ${lib.concatStringsSep " " publishBinsFor_} | xargs -rn2 ln -sr
+        node ${./binHelper.js} $out/bin $out/libexec/${pname}/node_modules \
+             ${lib.concatStringsSep " " publishBinsFor_} \
+             | xargs -rn2 bash -c 'chmod +x $0 && ln -sr $0 $1'
 
         runHook postInstall
       '';
